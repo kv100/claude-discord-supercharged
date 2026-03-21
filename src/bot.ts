@@ -17,7 +17,6 @@ import { homedir } from "node:os";
 import { AccessControl } from "./access.js";
 import { SessionManager } from "./session-manager.js";
 import { MessageStore } from "./store.js";
-import { MemoryManager } from "./memory.js";
 import { Transcriber } from "./transcriber.js";
 import { ButtonManager } from "./buttons.js";
 
@@ -151,7 +150,6 @@ for (const dir of [STATE_DIR, DATA_DIR, INBOX_DIR, APPROVED_DIR]) {
 // Initialize services
 const accessControl = new AccessControl();
 const store = new MessageStore();
-const memory = new MemoryManager();
 const transcriber = await Transcriber.create();
 const buttons = new ButtonManager();
 const sessions = new SessionManager(DEFAULT_CWD, DEFAULT_TOOLS);
@@ -438,19 +436,6 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
         }
       }
     }
-  }
-
-  // Inject thread memory if exists
-  const threadId = isThread ? msg.channelId : msg.id; // for DMs use message ID as seed
-  const memoryContent = memory.load(threadId);
-  if (memoryContent) {
-    prompt = `[Thread memory:\n${memoryContent}\n]\n\n${prompt}`;
-  }
-
-  // Inject recent history context
-  const recentContext = store.formatRecent(msg.channelId, 5);
-  if (recentContext) {
-    prompt = `[Recent conversation:\n${recentContext}\n]\n\n${prompt}`;
   }
 
   if (!prompt.trim()) {

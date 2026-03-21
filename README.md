@@ -4,7 +4,7 @@ Discord bot that gives every user their own Claude Code session through Discord 
 
 ## How it works
 
-Send a message to the bot (DM or @mention in an enabled channel) and it creates a Discord thread. Inside that thread, a full Claude Code session runs — the same session that powers Claude's own coding tasks, with access to file system tools, web search, and code execution. Reply in the thread to continue the conversation; the session resumes with full context. Sessions expire after 30 minutes of inactivity and can be restarted by sending a new message.
+Send a message to the bot (DM or @mention in an enabled channel) and it creates a Discord thread. Inside that thread, a full Claude Code session runs — the same session that powers Claude's own coding tasks, with access to file system tools, web search, and code execution. Reply in the thread to continue the conversation; the session resumes with full context via `--resume`. Sessions persist indefinitely — even after hours of inactivity, Claude picks up right where it left off.
 
 ```
 User message → access gate → create thread → spawn claude CLI → stream response → send chunks
@@ -18,13 +18,12 @@ User message → access gate → create thread → spawn claude CLI → stream r
 - **Thread-per-session** — each Discord thread maps to an isolated Claude Code session
 - **Session resume** — reply in a thread and the same Claude session continues with full history
 - **Persistence** — thread-to-session mapping survives bot restarts (SQLite)
-- **Idle cleanup** — sessions killed after 30 minutes of inactivity, check every 5 minutes
+- **Idle marking** — sessions marked idle after 30 minutes of inactivity; resume seamlessly when user returns
 - **Per-thread queue** — concurrent messages in the same thread are serialized, not dropped
 
 ### Conversation Intelligence
-- **Message history** — last 5 messages injected as context on each request
-- **Thread memory** — per-thread markdown notes, persisted across sessions, auto-compressed at 10K chars
-- **Context injection** — history and memory prepended to every prompt before sending to Claude
+- **Session resume** — Claude CLI keeps sessions on disk indefinitely; `--resume` restores full context even after hours of inactivity
+- **Message log** — all messages stored in SQLite for search and debugging (not injected into prompts — Claude's own context handles that)
 
 ### Communication
 - **Smart chunking** — long responses split at paragraph or line boundaries, never mid-word
@@ -255,7 +254,6 @@ src/
   bot.ts              Discord.js client — message routing, thread creation, reaction lifecycle
   session-manager.ts  Thread → Claude CLI session mapping, subprocess management, message queuing
   store.ts            SQLite message store — per-channel history, searchable, 500/channel cap
-  memory.ts           Per-thread markdown memory — persisted across sessions, auto-compress
   access.ts           Access control — pairing flow, allowlist, channel opt-in, gate checks
   transcriber.ts      Whisper voice transcription — backend detection, ffmpeg conversion
   buttons.ts          Discord button components — numbered option detection, interaction handling
@@ -329,7 +327,6 @@ All persistent state lives under `~/.claude/channels/discord/`:
   access.json           Access control config (auto-created on first run)
   data/
     messages.db         SQLite — message history + session mapping
-    memory/             Per-thread memory files (<thread-id>.md)
     restart.signal      Drop this file to trigger supervisor restart
   inbox/                Downloaded attachments (temp, not cleaned automatically)
   approved/             Pending approval markers (consumed on polling interval)
@@ -365,7 +362,7 @@ Install the Claude Code CLI: `npm install -g @anthropic-ai/claude-code` and auth
 
 **High memory usage**
 
-Each active session has an in-memory queue and recent-history buffer. Idle cleanup runs every 5 minutes and kills sessions idle for more than 30 minutes. The SQLite database is pruned hourly (14-day TTL, 500 message/channel cap, 50MB max).
+Each active session has an in-memory queue. Idle sessions are marked as idle after 30 minutes but stay resumable. The SQLite database is pruned hourly (14-day TTL, 500 message/channel cap, 50MB max).
 
 ## License
 

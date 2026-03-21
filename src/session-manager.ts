@@ -108,8 +108,7 @@ export class SessionManager {
   }
 
   hasSession(threadId: string): boolean {
-    const info = this.sessions.get(threadId);
-    return info !== undefined && info.status !== "dead";
+    return this.sessions.has(threadId);
   }
 
   setCwd(threadId: string, cwd: string): void {
@@ -137,21 +136,22 @@ export class SessionManager {
 
   cleanupIdle(maxIdleMs: number): string[] {
     const now = Date.now();
-    const killed: string[] = [];
+    const idled: string[] = [];
 
     for (const [threadId, info] of this.sessions) {
       const idleMs = now - info.lastActivity;
-      if (idleMs > maxIdleMs) {
-        this.killSession(threadId);
-        killed.push(threadId);
+      if (idleMs > maxIdleMs && info.status === "active") {
+        info.status = "idle";
+        this.persistSession(info);
+        idled.push(threadId);
       }
     }
 
-    if (killed.length > 0) {
-      console.log(`[session-manager] cleaned up ${killed.length} idle sessions: ${killed.join(", ")}`);
+    if (idled.length > 0) {
+      console.log(`[session-manager] marked ${idled.length} sessions as idle: ${idled.join(", ")}`);
     }
 
-    return killed;
+    return idled;
   }
 
   getSessionId(threadId: string): string | undefined {
@@ -207,8 +207,8 @@ export class SessionManager {
       "--betas", "context-1m-2025-08-07",
     ];
 
-    // Resume existing session
-    if (existing && existing.status !== "dead" && existing.sessionId) {
+    // Resume existing session (Claude CLI keeps sessions on disk indefinitely)
+    if (existing?.sessionId) {
       args.push("--resume", existing.sessionId);
     }
 

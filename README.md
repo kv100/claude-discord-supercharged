@@ -337,6 +337,10 @@ Install the Claude Code CLI: `npm install -g @anthropic-ai/claude-code` and auth
 
 Each active session has an in-memory queue. Idle sessions are marked as idle after 30 minutes but stay resumable. The SQLite database is pruned hourly (14-day TTL, 500 message/channel cap, 50MB max).
 
+## Credits
+
+Built on ideas and patterns from [claude-telegram-supercharged](https://github.com/k1p1l0/claude-telegram-supercharged) — the Telegram equivalent that pioneered SQLite message history, persistent memory, voice transcription, reaction status flow, and supervisor daemon patterns.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

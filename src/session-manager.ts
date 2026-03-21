@@ -200,7 +200,11 @@ export class SessionManager {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
+      "--verbose",
       "--dangerously-skip-permissions",
+      "--model", "claude-opus-4-6",
+      "--effort", "max",
+      "--betas", "context-1m-2025-08-07",
     ];
 
     // Resume existing session
@@ -271,13 +275,17 @@ export class SessionManager {
 
           // Assistant message — extract text and tool_use blocks
           if (msg.type === "assistant" && msg.message?.content) {
+            let hasText = false;
             for (const block of msg.message.content) {
               if (block.type === "text" && block.text) {
+                hasText = true;
                 onText(block.text);
               } else if (block.type === "tool_use" && block.name && onToolUse) {
                 onToolUse(block.name, JSON.stringify(block.input ?? {}));
               }
             }
+            // Add separator between assistant turns so text doesn't merge
+            if (hasText) onText("\n\n");
           }
 
           // Result — final message

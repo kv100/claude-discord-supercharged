@@ -518,9 +518,8 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
       // reaction cleanup not critical
     }
 
-    // Send response — don't use reply reference in newly created threads
-    // (the original message lives in the parent channel, not the thread)
-    const finalText = responseText || result.result || "(no response)";
+    // Use streaming text (all assistant turns) — result.result only has last turn
+    const finalText = responseText.trim() || result.result || "(no response)";
     const replyRef = workChannel.id === msg.channelId ? msg.id : undefined;
     await sendResponse(workChannel, finalText, access, replyRef);
 

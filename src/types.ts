@@ -5,6 +5,7 @@ export type DmPolicy = "pairing" | "allowlist" | "disabled";
 export interface GroupPolicy {
   requireMention: boolean;
   allowFrom: string[];
+  respondInThreads?: boolean; // respond to all messages in threads (no mention needed)
 }
 
 export interface PendingEntry {

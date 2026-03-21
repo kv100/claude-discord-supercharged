@@ -548,9 +548,13 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     }
   }
 
-  // In threads: only respond if it's a thread we're tracking, or bot is mentioned
+  // In threads: only respond if it's a thread we're tracking, bot is mentioned,
+  // or parent channel has respondInThreads enabled
   if (isThread && !sessions.hasSession(msg.channelId) && !isMentioned(msg)) {
-    return;
+    const parentPolicy = parentChannelId ? access.groups[parentChannelId] : undefined;
+    if (!parentPolicy?.respondInThreads) {
+      return;
+    }
   }
 
   // Ack reaction

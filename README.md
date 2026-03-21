@@ -14,40 +14,17 @@ User message → access gate → create thread → spawn claude CLI → stream r
 
 ## Features
 
-### Session Management
 - **Thread-per-session** — each Discord thread maps to an isolated Claude Code session
-- **Session resume** — reply in a thread and the same Claude session continues with full history
-- **Persistence** — thread-to-session mapping survives bot restarts (SQLite)
-- **Idle marking** — sessions marked idle after 30 minutes of inactivity; resume seamlessly when user returns
-- **Per-thread queue** — concurrent messages in the same thread are serialized, not dropped
-
-### Conversation Intelligence
-- **Session resume** — Claude CLI keeps sessions on disk indefinitely; `--resume` restores full context even after hours of inactivity
-- **Message log** — all messages stored in SQLite for search and debugging (not injected into prompts — Claude's own context handles that)
-
-### Communication
-- **Smart chunking** — long responses split at paragraph or line boundaries, never mid-word
-- **Reaction status flow** — 👀 (received) → 🔥 (working) → ✅ (done)
-- **Inline buttons** — numbered options at the end of a response become Discord buttons automatically
-- **Typing indicator** — bot shows "typing..." while Claude is processing
-
-### Voice & Media
-- **Voice transcription** — audio attachments transcribed automatically via Whisper
-- **Whisper backend detection** — tries `whisper-cli` (whisper.cpp) then `openai-whisper`, disables if neither found
-- **File attachments** — downloaded and routed to Claude as local file paths, 25MB limit per file
-
-### Access Control
-- **Pairing flow** — new DM users get a 6-character code; admin approves by adding user ID to allowlist
-- **Allowlist mode** — only pre-configured user IDs can use the bot
-- **Per-channel opt-in** — guild channels must be explicitly enabled; unlisted channels are ignored
-- **Mention filtering** — channels can require @mention or reply-to-bot before responding
-- **Custom mention patterns** — regex patterns to trigger the bot beyond standard @mention
-
-### Operations
-- **Supervisor daemon** — auto-restart with exponential backoff (1s → 30s max), 60s stable = reset
-- **Restart signal file** — drop `restart.signal` to trigger graceful restart without touching processes
-- **Health endpoint** — `GET /` returns `{status, uptime, sessions}` for uptime monitors
-- **Graceful shutdown** — SIGTERM drains in-flight requests, SIGKILL after 5s timeout
+- **Persistent resume** — sessions live on disk indefinitely; reply in a thread hours later and Claude picks up with full context
+- **Survives restarts** — thread-to-session mapping stored in SQLite; bot restart doesn't lose sessions
+- **Message queue** — concurrent messages in the same thread are serialized, not dropped
+- **Smart chunking** — long responses split at paragraph boundaries, never mid-word
+- **Status reactions** — 👀 (received) → 🔥 (working) → ✅ (done)
+- **Inline buttons** — when Claude offers numbered options, they become clickable Discord buttons
+- **Voice transcription** — audio attachments transcribed via Whisper (auto-detected at startup)
+- **File attachments** — downloaded and passed to Claude as local paths, 25MB limit
+- **Access control** — allowlist, pairing flow, per-channel opt-in, mention filtering
+- **Supervisor** — auto-restart with exponential backoff, graceful shutdown via signal file
 
 ## Quick Start
 
@@ -238,11 +215,10 @@ docker build -t claude-discord .
 docker run -d \
   -e DISCORD_BOT_TOKEN=your-token-here \
   -v ~/.claude:/root/.claude \
-  -v ~/.claude/channels/discord:/root/.claude/channels/discord \
   claude-discord
 ```
 
-Claude Code must be authenticated first — mount `~/.claude` from a host where you've already run `claude` and completed login.
+Claude Code must be authenticated first — mount `~/.claude` from a machine where you've already run `claude` and completed login.
 
 ## Architecture
 

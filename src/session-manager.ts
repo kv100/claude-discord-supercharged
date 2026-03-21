@@ -28,6 +28,20 @@ interface StreamJsonMessage {
   type: string;
   subtype?: string;
   session_id?: string;
+  event?: {
+    type: string;
+    index?: number;
+    content_block?: {
+      type: string;
+      name?: string;
+    };
+    delta?: {
+      type: string;
+      text?: string;
+      thinking?: string;
+      partial_json?: string;
+    };
+  };
   message?: {
     content: Array<{
       type: string;
@@ -215,6 +229,7 @@ export class SessionManager {
       "-p", prompt,
       "--output-format", "stream-json",
       "--verbose",
+      "--include-partial-messages",
       "--dangerously-skip-permissions",
       "--model", "claude-opus-4-6",
       "--effort", "max",
@@ -288,19 +303,24 @@ export class SessionManager {
             this.persistSession(info);
           }
 
-          // Assistant message — extract text and tool_use blocks
-          if (msg.type === "assistant" && msg.message?.content) {
-            let hasText = false;
-            for (const block of msg.message.content) {
-              if (block.type === "text" && block.text) {
-                hasText = true;
-                onText(block.text);
-              } else if (block.type === "tool_use" && block.name && onToolUse) {
-                onToolUse(block.name, JSON.stringify(block.input ?? {}));
-              }
+          // Stream events — real-time text deltas
+          if (msg.type === "stream_event" && msg.event) {
+            const evt = msg.event;
+
+            // Text streaming — word by word
+            if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta" && evt.delta.text) {
+              onText(evt.delta.text);
             }
-            // Add separator between assistant turns so text doesn't merge
-            if (hasText) onText("\n\n");
+
+            // Tool use start — show tool name
+            if (evt.type === "content_block_start" && evt.content_block?.type === "tool_use" && evt.content_block.name && onToolUse) {
+              onToolUse(evt.content_block.name, "");
+            }
+
+            // Message stop — add separator between turns
+            if (evt.type === "message_stop") {
+              onText("\n\n");
+            }
           }
 
           // Result — final message

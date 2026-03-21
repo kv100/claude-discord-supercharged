@@ -606,6 +606,23 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     prompt = "(empty message with attachments — describe what you see)";
   }
 
+  // For agent channel threads: inject the starter message (cycle report) as context
+  if (isThread && parentChannelId) {
+    const parentPolicy = access.groups[parentChannelId];
+    if (parentPolicy?.respondInThreads && !sessions.hasSession(msg.channelId)) {
+      // First message in this thread — fetch the report that started it
+      try {
+        const thread = msg.channel as ThreadChannel;
+        const starterMessage = await thread.fetchStarterMessage();
+        if (starterMessage?.content) {
+          prompt = `[This thread is under the following agent cycle report. Answer questions about this specific cycle using the agent's state files in the workspace.]\n\n${starterMessage.content}\n\n[User question:]\n${prompt}`;
+        }
+      } catch {
+        // starter message not available — continue without context
+      }
+    }
+  }
+
   // Determine working channel — create thread in guild channels, use existing in DMs/threads
   let workChannel: TextChannel | ThreadChannel | DMChannel;
 

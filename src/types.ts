@@ -6,6 +6,7 @@ export interface GroupPolicy {
   requireMention: boolean;
   allowFrom: string[];
   respondInThreads?: boolean; // respond to all messages in threads (no mention needed)
+  threadCwd?: string; // cwd for Claude sessions in threads (e.g. agent workspace)
 }
 
 export interface PendingEntry {

@@ -647,6 +647,14 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
   const replyRef = workChannel.id === msg.channelId ? msg.id : undefined;
   const streaming = new StreamingMessage(workChannel, workThreadId, access, replyRef);
 
+  // Set cwd for agent channel threads (so Claude runs in agent workspace)
+  if (isThread && parentChannelId) {
+    const parentPolicy = access.groups[parentChannelId];
+    if (parentPolicy?.threadCwd && !sessions.hasSession(workThreadId)) {
+      sessions.setCwd(workThreadId, parentPolicy.threadCwd);
+    }
+  }
+
   try {
     const result = await sessions.sendMessage(
       workThreadId,

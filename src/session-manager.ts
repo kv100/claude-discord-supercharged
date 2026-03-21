@@ -130,12 +130,17 @@ export class SessionManager {
     return this.sessions.has(threadId);
   }
 
+  private cwdOverrides: Map<string, string> = new Map();
+
   setCwd(threadId: string, cwd: string): void {
     const info = this.sessions.get(threadId);
     if (info) {
       info.cwd = cwd;
       this.sessions.set(threadId, info);
       this.persistSession(info);
+    } else {
+      // Pre-set cwd for threads that don't have a session yet
+      this.cwdOverrides.set(threadId, cwd);
     }
   }
 
@@ -222,7 +227,8 @@ export class SessionManager {
   private async executeQuery(threadId: string, pending: PendingMessage): Promise<SendResult> {
     const { prompt, onText, onToolUse } = pending;
     const existing = this.sessions.get(threadId);
-    const cwd = existing?.cwd ?? this.defaultCwd;
+    const cwd = existing?.cwd ?? this.cwdOverrides.get(threadId) ?? this.defaultCwd;
+    this.cwdOverrides.delete(threadId); // consume once
 
     // Build claude CLI args
     const args = [

@@ -3,6 +3,9 @@ import {
   GatewayIntentBits,
   Partials,
   ChannelType,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   type Message,
   type TextChannel,
   type ThreadChannel,
@@ -136,6 +139,163 @@ function detectOptions(text: string): string[] | null {
     }
   }
   return null;
+}
+
+// ── Streaming Message ─────────────────────────────────────────────
+
+const STREAM_EDIT_INTERVAL = 2000; // edit every 2s (within Discord rate limits)
+const STREAM_SAFE_LIMIT = MAX_DISCORD_LENGTH - 20; // room for cursor + stop hint
+
+class StreamingMessage {
+  private channel: TextChannel | ThreadChannel | DMChannel;
+  private currentMessage: Message | null = null;
+  private buffer = "";
+  private lastEditedText = "";
+  private updateTimer: ReturnType<typeof setInterval> | null = null;
+  private sentMessageIds: string[] = [];
+  private replyToId?: string;
+  private isFirstMessage = true;
+  private chunkLimit: number;
+  private chunkMode: "length" | "newline";
+  private stopButtonId: string;
+  private toolStatus = "";
+
+  constructor(
+    channel: TextChannel | ThreadChannel | DMChannel,
+    threadId: string,
+    access?: { textChunkLimit?: number; chunkMode?: "length" | "newline" },
+    replyToId?: string,
+  ) {
+    this.channel = channel;
+    this.replyToId = replyToId;
+    this.chunkLimit = Math.min(access?.textChunkLimit ?? MAX_DISCORD_LENGTH, MAX_DISCORD_LENGTH);
+    this.chunkMode = access?.chunkMode ?? "newline";
+    this.stopButtonId = `stop:${threadId}`;
+    this.startUpdateLoop();
+  }
+
+  append(text: string) {
+    this.buffer += text;
+  }
+
+  setToolStatus(toolName: string) {
+    this.toolStatus = toolName;
+  }
+
+  getText(): string {
+    return this.buffer;
+  }
+
+  private buildStopRow(disabled = false): ActionRowBuilder<ButtonBuilder> {
+    return new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder()
+        .setCustomId(this.stopButtonId)
+        .setLabel("Stop")
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(disabled),
+    );
+  }
+
+  private startUpdateLoop() {
+    this.updateTimer = setInterval(() => this.flushUpdate(), STREAM_EDIT_INTERVAL);
+  }
+
+  private async flushUpdate() {
+    if (this.buffer === this.lastEditedText && !this.toolStatus) return;
+
+    // If pending text overflows, finalize current message and start fresh
+    if (this.buffer.length > STREAM_SAFE_LIMIT && this.currentMessage) {
+      const splitText = this.buffer.slice(0, STREAM_SAFE_LIMIT);
+      const chunks = chunk(splitText, this.chunkLimit, this.chunkMode);
+      const lastChunk = chunks[chunks.length - 1];
+      await this.currentMessage.edit({ content: lastChunk, components: [] }).catch(() => {});
+      this.sentMessageIds.push(this.currentMessage.id);
+      noteSent(this.currentMessage.id);
+      // Send earlier chunks if split produced multiple
+      for (let i = 0; i < chunks.length - 1; i++) {
+        // Already sent messages should be earlier — but for streaming we keep it simple
+      }
+      this.currentMessage = null;
+      this.buffer = this.buffer.slice(splitText.length);
+      this.lastEditedText = "";
+    }
+
+    const cursor = this.toolStatus ? ` _${this.toolStatus}…_` : " ▍";
+    const displayText = this.buffer.slice(0, STREAM_SAFE_LIMIT - 30) + cursor;
+
+    try {
+      if (!this.currentMessage) {
+        const msgOptions: Record<string, unknown> = {
+          content: displayText || "_thinking…_",
+          components: [this.buildStopRow()],
+        };
+        if (this.isFirstMessage && this.replyToId) {
+          msgOptions.reply = { messageReference: this.replyToId };
+          this.isFirstMessage = false;
+        }
+        this.currentMessage = await this.channel.send(msgOptions as any);
+        this.lastEditedText = this.buffer;
+      } else {
+        await this.currentMessage.edit({ content: displayText, components: [this.buildStopRow()] });
+        this.lastEditedText = this.buffer;
+      }
+    } catch (err) {
+      console.error("[bot] streaming update failed:", err);
+    }
+
+    this.toolStatus = "";
+  }
+
+  async finalize(killed = false): Promise<string[]> {
+    if (this.updateTimer) {
+      clearInterval(this.updateTimer);
+      this.updateTimer = null;
+    }
+
+    const text = this.buffer.trim();
+
+    if (killed && this.currentMessage) {
+      const stoppedText = text || "(stopped)";
+      const display = stoppedText.length > this.chunkLimit
+        ? stoppedText.slice(0, this.chunkLimit - 20) + "\n\n_(stopped)_"
+        : stoppedText + "\n\n_(stopped)_";
+      await this.currentMessage.edit({ content: display, components: [this.buildStopRow(true)] }).catch(() => {});
+      this.sentMessageIds.push(this.currentMessage.id);
+      noteSent(this.currentMessage.id);
+      return this.sentMessageIds;
+    }
+
+    if (!text && this.currentMessage) {
+      await this.currentMessage.edit({ content: "_(no response)_", components: [] }).catch(() => {});
+      this.sentMessageIds.push(this.currentMessage.id);
+      noteSent(this.currentMessage.id);
+      return this.sentMessageIds;
+    }
+
+    if (!text) return this.sentMessageIds;
+
+    // Chunk the final text properly
+    const chunks = chunk(text, this.chunkLimit, this.chunkMode);
+
+    for (let i = 0; i < chunks.length; i++) {
+      try {
+        if (i === 0 && this.currentMessage) {
+          // Edit the streaming message with final text, remove stop button
+          await this.currentMessage.edit({ content: chunks[0], components: [] });
+          this.sentMessageIds.push(this.currentMessage.id);
+          noteSent(this.currentMessage.id);
+        } else {
+          const sent = await this.channel.send({ content: chunks[i] });
+          this.sentMessageIds.push(sent.id);
+          noteSent(sent.id);
+        }
+      } catch (err) {
+        console.error(`[bot] finalize chunk ${i + 1}/${chunks.length} failed:`, err);
+      }
+    }
+
+    return this.sentMessageIds;
+  }
 }
 
 // ── Bot ──────────────────────────────────────────────────────────
@@ -478,19 +638,20 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     // no permission
   }
 
-  // Send to Claude
+  // Send to Claude with streaming
   const workThreadId = workChannel.id;
-  let responseText = "";
+  const replyRef = workChannel.id === msg.channelId ? msg.id : undefined;
+  const streaming = new StreamingMessage(workChannel, workThreadId, access, replyRef);
 
   try {
     const result = await sessions.sendMessage(
       workThreadId,
       prompt,
       (text) => {
-        responseText += text;
+        streaming.append(text);
       },
       (toolName, _input) => {
-        // Optionally log tool usage — for now just accumulate
+        streaming.setToolStatus(toolName);
         console.log(`[bot] tool: ${toolName}`);
       },
     );
@@ -498,15 +659,31 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     // Remove working reaction, add done
     try {
       await msg.reactions.cache.get("🔥")?.users.remove(client.user!.id);
-      await msg.react("✅");
+      await msg.react(result.killed ? "⏹️" : "✅");
     } catch {
       // reaction cleanup not critical
     }
 
-    // Use streaming text (all assistant turns) — result.result only has last turn
-    const finalText = responseText.trim() || result.result || "(no response)";
-    const replyRef = workChannel.id === msg.channelId ? msg.id : undefined;
-    await sendResponse(workChannel, finalText, access, replyRef);
+    // Finalize the streaming message
+    const sentIds = await streaming.finalize(result.killed);
+
+    // Store outgoing messages
+    const finalText = streaming.getText().trim() || result.result || "(no response)";
+    for (const sentId of sentIds) {
+      store.store({
+        message_id: sentId,
+        channel_id: workChannel.id,
+        user_id: client.user?.id ?? "bot",
+        username: client.user?.username ?? "claude",
+        display_name: client.user?.displayName ?? "Claude",
+        text: finalText.slice(0, 500), // store a preview
+        date: Math.floor(Date.now() / 1000),
+        is_outgoing: true,
+        thread_id: workChannel.isThread() ? workChannel.id : undefined,
+      });
+    }
+
+    if (result.killed) return; // Don't run option detection on stopped responses
 
     // Detect numbered options and offer Discord buttons
     const options = detectOptions(finalText);
@@ -517,14 +694,14 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
         options,
       ).then(async (choice) => {
         if (choice === "timeout" || choice === "cancelled") return;
-        // Send the chosen option as a new message to the same session
+        const followUpStreaming = new StreamingMessage(workChannel, workThreadId, access);
         const followUp = await sessions.sendMessage(
           workThreadId,
           choice,
-          () => {},
+          (text) => { followUpStreaming.append(text); },
+          (toolName) => { followUpStreaming.setToolStatus(toolName); },
         );
-        const followUpText = followUp.result || "(no response)";
-        await sendResponse(workChannel, followUpText, access);
+        await followUpStreaming.finalize(followUp.killed);
       }).catch(console.error);
     }
 
@@ -534,14 +711,14 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     }
   } catch (err) {
     console.error("[bot] error processing message:", err);
+    await streaming.finalize();
 
     try {
       await msg.reactions.cache.get("🔥")?.users.remove(client.user!.id);
     } catch { /* ignore */ }
 
     const errMsg = err instanceof Error ? err.message : String(err);
-    const errReplyRef = workChannel.id === msg.channelId ? msg.id : undefined;
-    await sendResponse(workChannel, `Error: ${errMsg}`, access, errReplyRef);
+    await sendResponse(workChannel, `Error: ${errMsg}`, access, replyRef);
   }
 });
 
@@ -549,6 +726,18 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isButton()) return;
+
+  // Handle Stop button
+  if (interaction.customId.startsWith("stop:")) {
+    const threadId = interaction.customId.slice(5);
+    const killed = sessions.killQuery(threadId);
+    await interaction.reply({
+      content: killed ? "Stopping generation…" : "Nothing to stop.",
+      ephemeral: true,
+    }).catch(() => {});
+    return;
+  }
+
   buttons.handleInteraction(interaction);
 });
 

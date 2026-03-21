@@ -21,6 +21,7 @@ interface SendResult {
   result: string;
   sessionId: string;
   cost: number;
+  killed?: boolean;
 }
 
 interface StreamJsonMessage {
@@ -54,6 +55,10 @@ export class SessionManager {
   // Per-thread queues: if a query is running, subsequent sends are queued
   private activeQueries: Map<string, boolean> = new Map();
   private messageQueues: Map<string, PendingMessage[]> = new Map();
+
+  // Exposed subprocess references for kill support
+  private activeProcesses: Map<string, ReturnType<typeof Bun.spawn>> = new Map();
+  private killedThreads: Set<string> = new Set();
 
   constructor(defaultCwd: string, allowedTools: string[], claudeBinary = "claude") {
     this.defaultCwd = defaultCwd;
@@ -158,6 +163,15 @@ export class SessionManager {
     return this.sessions.get(threadId)?.sessionId;
   }
 
+  killQuery(threadId: string): boolean {
+    const proc = this.activeProcesses.get(threadId);
+    if (!proc) return false;
+    this.killedThreads.add(threadId);
+    proc.kill();
+    this.activeProcesses.delete(threadId);
+    return true;
+  }
+
   close(): void {
     this.db.close();
   }
@@ -231,6 +245,7 @@ export class SessionManager {
         stderr: "pipe",
         env: { ...process.env },
       });
+      this.activeProcesses.set(threadId, proc);
 
       // Read streaming JSON line by line
       const reader = proc.stdout.getReader();
@@ -321,13 +336,27 @@ export class SessionManager {
       }
 
       // Wait for process to exit
+      this.activeProcesses.delete(threadId);
       const exitCode = await proc.exited;
+
+      if (this.killedThreads.has(threadId)) {
+        this.killedThreads.delete(threadId);
+        return { result: finalResult, sessionId: resolvedSessionId, cost: totalCost, killed: true };
+      }
+
       if (exitCode !== 0 && !finalResult) {
         const stderr = await new Response(proc.stderr).text();
         throw new Error(`claude exited with code ${exitCode}: ${stderr.trim()}`);
       }
 
     } catch (err) {
+      this.activeProcesses.delete(threadId);
+
+      if (this.killedThreads.has(threadId)) {
+        this.killedThreads.delete(threadId);
+        return { result: finalResult, sessionId: resolvedSessionId, cost: totalCost, killed: true };
+      }
+
       console.error(`[session-manager] query failed for thread ${threadId}:`, err);
 
       const info = this.sessions.get(threadId);

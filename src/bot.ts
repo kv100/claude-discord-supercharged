@@ -566,7 +566,7 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
-// ── Health Check (Railway) ────────────────────────────────────────
+// ── Health Check ──────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT ?? "8080", 10);
 Bun.serve({

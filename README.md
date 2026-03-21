@@ -46,7 +46,7 @@ User message → access gate → create thread → spawn claude CLI → stream r
 ### Operations
 - **Supervisor daemon** — auto-restart with exponential backoff (1s → 30s max), 60s stable = reset
 - **Restart signal file** — drop `restart.signal` to trigger graceful restart without touching processes
-- **Health endpoint** — `GET /` returns `{status, uptime, sessions}` for Railway / uptime monitors
+- **Health endpoint** — `GET /` returns `{status, uptime, sessions}` for uptime monitors
 - **Graceful shutdown** — SIGTERM drains in-flight requests, SIGKILL after 5s timeout
 
 ## Quick Start
@@ -81,7 +81,7 @@ claude
 ### 3. Clone and install
 
 ```bash
-git clone https://github.com/your-org/claude-discord-supercharged
+git clone https://github.com/kv100/claude-discord-supercharged
 cd claude-discord-supercharged
 bun install
 ```
@@ -184,31 +184,33 @@ To disable transcription globally, set `"autoTranscribe": false` in `access.json
 
 ## Deployment
 
-### Local
+The bot runs anywhere you can install Bun and Claude Code CLI. No cloud APIs needed — it uses your Claude Max subscription through the CLI, so there are no per-call costs.
+
+### Your computer (simplest)
+
+Just run the bot on your laptop or desktop. As long as it's on and connected, the bot responds. Great for personal use or testing.
 
 ```bash
+# Run directly
 bun src/bot.ts
-```
 
-### Supervisor (recommended for persistent local installs)
-
-The supervisor manages the bot process, restarts on crash, and responds to signal files:
-
-```bash
+# Or with auto-restart on crash (recommended)
 bun supervisor.ts
 ```
 
-Backoff schedule: 1s → 2s → 4s → 8s → 16s → 30s (max). Resets after 60 seconds of stable uptime.
-
-To trigger a graceful restart without touching the supervisor:
+The supervisor restarts the bot automatically with exponential backoff (1s → 30s max). To trigger a graceful restart:
 
 ```bash
 touch ~/.claude/channels/discord/data/restart.signal
 ```
 
-### Systemd
+### VPS (always-on)
 
-```ini
+For 24/7 availability, run on any cheap VPS. A €4/month ARM instance (Hetzner CAX11, 2 vCPU, 4GB RAM) is more than enough.
+
+```bash
+# SSH into your VPS, install Bun + Claude Code, clone the repo, then:
+sudo tee /etc/systemd/system/claude-discord.service << 'EOF'
 [Unit]
 Description=claude-discord-supercharged
 After=network.target
@@ -224,9 +226,8 @@ Environment=DISCORD_BOT_TOKEN=your-token-here
 
 [Install]
 WantedBy=multi-user.target
-```
+EOF
 
-```bash
 sudo systemctl enable --now claude-discord.service
 ```
 
@@ -236,16 +237,12 @@ sudo systemctl enable --now claude-discord.service
 docker build -t claude-discord .
 docker run -d \
   -e DISCORD_BOT_TOKEN=your-token-here \
+  -v ~/.claude:/root/.claude \
   -v ~/.claude/channels/discord:/root/.claude/channels/discord \
-  -p 8080:8080 \
   claude-discord
 ```
 
-The Dockerfile installs Bun, Node.js, Claude Code CLI, and ffmpeg. Claude Code must be authenticated — mount `~/.claude` from a host that has already run `claude` and completed auth.
-
-### Railway
-
-The bot exposes a health endpoint on `PORT` (default `8080`). Railway detects this automatically. Set `DISCORD_BOT_TOKEN` and `CLAUDE_CWD` in Railway environment variables.
+Claude Code must be authenticated first — mount `~/.claude` from a host where you've already run `claude` and completed login.
 
 ## Architecture
 

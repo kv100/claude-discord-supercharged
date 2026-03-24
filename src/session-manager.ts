@@ -326,7 +326,7 @@ export class SessionManager {
       "--include-partial-messages",
       "--dangerously-skip-permissions",
       "--model", "claude-opus-4-6",
-      "--effort", "max",
+      "--effort", "high",
       "--betas", "context-1m-2025-08-07",
     ];
 

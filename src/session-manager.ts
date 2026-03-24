@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { mkdirSync, readFileSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
+import { spawnSync } from "child_process";
 import type { SessionInfo } from "./types.js";
 
 const DB_PATH = join(homedir(), ".claude", "channels", "discord", "data", "messages.db");
@@ -58,6 +59,64 @@ interface StreamJsonMessage {
 
 // ── SessionManager ───────────────────────────────────────────────────────────
 
+// ── Account Switcher ─────────────────────────────────────────────────────────
+
+const TOKENS_FILE = join(homedir(), ".claude-tokens.sh");
+
+class AccountSwitcher {
+  private tokens: string[] = [];
+  private activeIndex = 0;
+
+  constructor() {
+    this.loadTokens();
+  }
+
+  private loadTokens(): void {
+    if (!existsSync(TOKENS_FILE)) {
+      console.log("[account-switcher] no tokens file, using env token only");
+      const envToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      if (envToken) this.tokens = [envToken];
+      return;
+    }
+
+    const content = readFileSync(TOKENS_FILE, "utf8");
+    const matches = content.matchAll(/CLAUDE_TOKEN_\d+="([^"]+)"/g);
+    for (const m of matches) {
+      this.tokens.push(m[1]);
+    }
+
+    // Detect which token is currently active
+    const current = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+    const idx = this.tokens.indexOf(current);
+    if (idx >= 0) this.activeIndex = idx;
+
+    console.log(`[account-switcher] loaded ${this.tokens.length} accounts, active: #${this.activeIndex + 1}`);
+  }
+
+  get currentToken(): string | undefined {
+    return this.tokens[this.activeIndex];
+  }
+
+  get accountLabel(): string {
+    return `#${this.activeIndex + 1}`;
+  }
+
+  switch(): boolean {
+    if (this.tokens.length < 2) return false;
+    this.activeIndex = (this.activeIndex + 1) % this.tokens.length;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = this.tokens[this.activeIndex];
+    console.log(`[account-switcher] switched to account #${this.activeIndex + 1}`);
+    return true;
+  }
+
+  isRateLimitError(errorText: string): boolean {
+    const patterns = ["hit your limit", "rate limit", "Rate limit", "rate_limit", "usage limit", "too many requests"];
+    return patterns.some(p => errorText.includes(p));
+  }
+}
+
+// ── SessionManager ───────────────────────────────────────────────────────────
+
 export class SessionManager {
   sessions: Map<string, SessionInfo> = new Map();
 
@@ -65,6 +124,7 @@ export class SessionManager {
   private defaultCwd: string;
   private allowedTools: string[];
   private claudeBinary: string;
+  private accountSwitcher: AccountSwitcher;
 
   // Per-thread queues: if a query is running, subsequent sends are queued
   private activeQueries: Map<string, boolean> = new Map();
@@ -78,6 +138,7 @@ export class SessionManager {
     this.defaultCwd = defaultCwd;
     this.allowedTools = allowedTools;
     this.claudeBinary = claudeBinary;
+    this.accountSwitcher = new AccountSwitcher();
 
     mkdirSync(DB_DIR, { recursive: true });
 
@@ -202,9 +263,36 @@ export class SessionManager {
 
     this.executeQuery(threadId, pending)
       .then((result) => {
+        // Check if result is a rate limit error — try switching account
+        if (this.accountSwitcher.isRateLimitError(result.result)) {
+          console.log(`[session-manager] rate limit on account ${this.accountSwitcher.accountLabel}, switching...`);
+          if (this.accountSwitcher.switch()) {
+            console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
+            return this.executeQuery(threadId, pending);
+          }
+        }
+        return result;
+      })
+      .then((result) => {
         pending.resolve(result);
       })
       .catch((err) => {
+        // Check if error message contains rate limit
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (this.accountSwitcher.isRateLimitError(errMsg)) {
+          console.log(`[session-manager] rate limit error on account ${this.accountSwitcher.accountLabel}, switching...`);
+          if (this.accountSwitcher.switch()) {
+            console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
+            this.executeQuery(threadId, pending)
+              .then(r => pending.resolve(r))
+              .catch(e => pending.reject(e))
+              .finally(() => {
+                this.activeQueries.set(threadId, false);
+                this.drainQueue(threadId);
+              });
+            return;
+          }
+        }
         pending.reject(err);
       })
       .finally(() => {

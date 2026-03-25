@@ -322,12 +322,8 @@ export class SessionManager {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
-      "--verbose",
-      "--include-partial-messages",
       "--dangerously-skip-permissions",
       "--model", "claude-opus-4-6",
-      "--effort", "high",
-      "--betas", "context-1m-2025-08-07",
     ];
 
     // Resume existing session (Claude CLI keeps sessions on disk indefinitely)

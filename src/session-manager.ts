@@ -268,7 +268,7 @@ export class SessionManager {
           console.log(`[session-manager] rate limit on account ${this.accountSwitcher.accountLabel}, switching...`);
           if (this.accountSwitcher.switch()) {
             console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
-            return this.executeQuery(threadId, pending);
+            return this.executeQuery(threadId, pending, { skipResume: true });
           }
         }
         return result;
@@ -280,7 +280,7 @@ export class SessionManager {
           console.log(`[session-manager] rate limit error on account ${this.accountSwitcher.accountLabel}, switching...`);
           if (this.accountSwitcher.switch()) {
             console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
-            return this.executeQuery(threadId, pending);
+            return this.executeQuery(threadId, pending, { skipResume: true });
           }
         }
         throw err;
@@ -308,7 +308,11 @@ export class SessionManager {
     this.runQuery(threadId, next);
   }
 
-  private async executeQuery(threadId: string, pending: PendingMessage): Promise<SendResult> {
+  private async executeQuery(
+    threadId: string,
+    pending: PendingMessage,
+    opts?: { skipResume?: boolean },
+  ): Promise<SendResult> {
     const { prompt, onText, onToolUse } = pending;
     const existing = this.sessions.get(threadId);
     const cwd = existing?.cwd ?? this.cwdOverrides.get(threadId) ?? this.defaultCwd;
@@ -322,8 +326,8 @@ export class SessionManager {
       "--model", "claude-opus-4-6",
     ];
 
-    // Resume existing session (Claude CLI keeps sessions on disk indefinitely)
-    if (existing?.sessionId) {
+    // Resume existing session (skip on retry after account switch — session belongs to other account)
+    if (existing?.sessionId && !opts?.skipResume) {
       args.push("--resume", existing.sessionId);
     }
 

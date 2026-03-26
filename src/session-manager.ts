@@ -273,26 +273,22 @@ export class SessionManager {
         }
         return result;
       })
-      .then((result) => {
-        pending.resolve(result);
-      })
       .catch((err) => {
-        // Check if error message contains rate limit
+        // Check if error message contains rate limit — retry on next account
         const errMsg = err instanceof Error ? err.message : String(err);
         if (this.accountSwitcher.isRateLimitError(errMsg)) {
           console.log(`[session-manager] rate limit error on account ${this.accountSwitcher.accountLabel}, switching...`);
           if (this.accountSwitcher.switch()) {
             console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
-            this.executeQuery(threadId, pending)
-              .then(r => pending.resolve(r))
-              .catch(e => pending.reject(e))
-              .finally(() => {
-                this.activeQueries.set(threadId, false);
-                this.drainQueue(threadId);
-              });
-            return;
+            return this.executeQuery(threadId, pending);
           }
         }
+        throw err;
+      })
+      .then((result) => {
+        pending.resolve(result);
+      })
+      .catch((err) => {
         pending.reject(err);
       })
       .finally(() => {

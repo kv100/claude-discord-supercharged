@@ -322,6 +322,7 @@ export class SessionManager {
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
+      "--verbose",
       "--dangerously-skip-permissions",
       "--model", "claude-opus-4-6",
     ];

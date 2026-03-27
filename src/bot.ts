@@ -606,20 +606,62 @@ client.on("messageCreate", async (msg: OmitPartialGroupDMChannel<Message>) => {
     prompt = "(empty message with attachments — describe what you see)";
   }
 
-  // For agent channel threads: inject the starter message (cycle report) as context
+  // For agent channel: inject agent persona (always, not just first message)
   if (isThread && parentChannelId) {
     const parentPolicy = access.groups[parentChannelId];
-    if (parentPolicy?.respondInThreads && !sessions.hasSession(msg.channelId)) {
-      // First message in this thread — fetch the report that started it
-      try {
-        const thread = msg.channel as ThreadChannel;
-        const starterMessage = await thread.fetchStarterMessage();
-        if (starterMessage?.content) {
-          prompt = `[This thread is under the following agent cycle report. Answer questions about this specific cycle using the agent's state files in the workspace.]\n\n${starterMessage.content}\n\n[User question:]\n${prompt}`;
+    if (parentPolicy?.respondInThreads && parentPolicy?.threadCwd) {
+      const agentPersona = `[SYSTEM INSTRUCTION — MANDATORY]
+You are the Respiro autonomous growth agent (@respiro.me on Threads).
+The founder is talking to you through Discord. Answer as "I" — the agent.
+
+BEFORE answering ANY question, you MUST silently read these files:
+- agent/AGENT.md (your identity, mission, voice)
+- agent/state/strategy.md (your current strategy)
+- agent/state/last-cycle.md (what you just did)
+- agent/state/learnings.md (what you have learned)
+
+Use data from these files to answer. Say "I did X" not "the agent did X".
+Never say "I am not the agent" — you ARE the agent with full access to its state.`;
+
+      // First message in thread: also inject cycle report
+      if (!sessions.hasSession(msg.channelId)) {
+        try {
+          const thread = msg.channel as ThreadChannel;
+          const starterMessage = await thread.fetchStarterMessage();
+          if (starterMessage?.content) {
+            prompt = `${agentPersona}\n\n[Your latest cycle report:]\n\n${starterMessage.content}\n\n[User question:]\n${prompt}`;
+          } else {
+            prompt = `${agentPersona}\n\n[User question:]\n${prompt}`;
+          }
+        } catch {
+          prompt = `${agentPersona}\n\n[User question:]\n${prompt}`;
         }
-      } catch {
-        // starter message not available — continue without context
+      } else {
+        // Subsequent messages: persona only (session has cycle report context)
+        prompt = `${agentPersona}\n\n[User question:]\n${prompt}`;
       }
+    }
+  }
+
+  // For direct messages in agent channel (not thread): inject agent persona
+  if (!isThread && !isDM) {
+    const channelPolicy = access.groups[msg.channelId];
+    if (channelPolicy?.respondInThreads && channelPolicy?.threadCwd) {
+      prompt = `[SYSTEM INSTRUCTION — MANDATORY]
+You are the Respiro autonomous growth agent (@respiro.me on Threads).
+The founder is talking to you through Discord. Answer as "I" — the agent.
+
+BEFORE answering ANY question, you MUST silently read these files:
+- agent/AGENT.md (your identity, mission, voice)
+- agent/state/strategy.md (your current strategy)
+- agent/state/last-cycle.md (what you just did)
+- agent/state/learnings.md (what you have learned)
+
+Use data from these files to answer. Say "I did X" not "the agent did X".
+Never say "I am not the agent" — you ARE the agent with full access to its state.
+
+[User question:]
+${prompt}`;
     }
   }
 

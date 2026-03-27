@@ -323,6 +323,7 @@ export class SessionManager {
       "-p", prompt,
       "--output-format", "stream-json",
       "--verbose",
+      "--include-partial-messages",
       "--dangerously-skip-permissions",
       "--model", "claude-opus-4-6",
     ];

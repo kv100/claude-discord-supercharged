@@ -66,12 +66,22 @@ const TOKENS_FILE = join(homedir(), ".claude-tokens.sh");
 class AccountSwitcher {
   private tokens: string[] = [];
   private activeIndex = 0;
+  private useGlm: boolean;
 
-  constructor() {
+  constructor(useGlm: boolean) {
+    this.useGlm = useGlm;
     this.loadTokens();
   }
 
   private loadTokens(): void {
+    if (this.useGlm) {
+      // GLM mode: no account failover
+      const glmToken = process.env.GLM_AUTH_TOKEN;
+      if (glmToken) this.tokens = [glmToken];
+      console.log(`[account-switcher] GLM mode, no failover`);
+      return;
+    }
+
     if (!existsSync(TOKENS_FILE)) {
       console.log("[account-switcher] no tokens file, using env token only");
       const envToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -102,7 +112,7 @@ class AccountSwitcher {
   }
 
   switch(): boolean {
-    if (this.tokens.length < 2) return false;
+    if (this.useGlm || this.tokens.length < 2) return false;
     this.activeIndex = (this.activeIndex + 1) % this.tokens.length;
     process.env.CLAUDE_CODE_OAUTH_TOKEN = this.tokens[this.activeIndex];
     console.log(`[account-switcher] switched to account #${this.activeIndex + 1}`);
@@ -134,11 +144,16 @@ export class SessionManager {
   private activeProcesses: Map<string, ReturnType<typeof Bun.spawn>> = new Map();
   private killedThreads: Set<string> = new Set();
 
+  private useGlm: boolean;
+  private glmModel: string;
+
   constructor(defaultCwd: string, allowedTools: string[], claudeBinary = "claude") {
     this.defaultCwd = defaultCwd;
     this.allowedTools = allowedTools;
     this.claudeBinary = claudeBinary;
-    this.accountSwitcher = new AccountSwitcher();
+    this.useGlm = process.env.USE_GLM === "1";
+    this.glmModel = process.env.GLM_SONNET_MODEL || "glm-5.1";
+    this.accountSwitcher = new AccountSwitcher(this.useGlm);
 
     mkdirSync(DB_DIR, { recursive: true });
 
@@ -263,8 +278,8 @@ export class SessionManager {
 
     this.executeQuery(threadId, pending)
       .then((result) => {
-        // Check if result is a rate limit error — try switching account
-        if (this.accountSwitcher.isRateLimitError(result.result)) {
+        // Check if result is a rate limit error — try switching account (skip for GLM)
+        if (!this.useGlm && this.accountSwitcher.isRateLimitError(result.result)) {
           console.log(`[session-manager] rate limit on account ${this.accountSwitcher.accountLabel}, switching...`);
           if (this.accountSwitcher.switch()) {
             console.log(`[session-manager] retrying on account ${this.accountSwitcher.accountLabel}`);
@@ -319,13 +334,14 @@ export class SessionManager {
     this.cwdOverrides.delete(threadId); // consume once
 
     // Build claude CLI args
+    const model = this.useGlm ? this.glmModel : "claude-opus-4-6";
     const args = [
       "-p", prompt,
       "--output-format", "stream-json",
       "--verbose",
       "--include-partial-messages",
       "--dangerously-skip-permissions",
-      "--model", "claude-opus-4-6",
+      "--model", model,
     ];
 
     // Resume existing session (skip on retry after account switch — session belongs to other account)
@@ -346,11 +362,21 @@ export class SessionManager {
     let finalResult = "";
 
     try {
+      // Build env: GLM mode overrides API endpoint and auth
+      const spawnEnv: Record<string, string | undefined> = { ...process.env };
+      if (this.useGlm) {
+        spawnEnv.ANTHROPIC_BASE_URL = process.env.GLM_BASE_URL;
+        spawnEnv.ANTHROPIC_AUTH_TOKEN = process.env.GLM_AUTH_TOKEN;
+        spawnEnv.DISABLE_MODEL_AVAILABILITY_CHECK = "1";
+        // Unset Claude OAuth so it doesn't interfere
+        delete spawnEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      }
+
       const proc = Bun.spawn([this.claudeBinary, ...args], {
         cwd,
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env },
+        env: spawnEnv,
       });
       this.activeProcesses.set(threadId, proc);
 
@@ -534,7 +560,7 @@ export class SessionManager {
       this.sessions.set(row.thread_id, info);
     }
 
-    console.log(`[session-manager] loaded ${this.sessions.size} sessions from DB`);
+    console.log(`[session-manager] loaded ${this.sessions.size} sessions from DB${this.useGlm ? ` (GLM mode: ${this.glmModel})` : ""}`);
   }
 }
 
